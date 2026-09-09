@@ -1,0 +1,1 @@
+"""ResearchMate application package."""
