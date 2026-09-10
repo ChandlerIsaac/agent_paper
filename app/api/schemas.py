@@ -33,6 +33,11 @@ class WebApprovalDecision(BaseModel):
     accepted: bool
 
 
+class CitationEnrichmentRequest(BaseModel):
+    accepted: bool
+    limit: int = Field(default=30,ge=1,le=50)
+
+
 class Credentials(BaseModel):
     username: str = Field(min_length=3,max_length=40,pattern=r"^[a-zA-Z0-9_\-]+$")
     password: str = Field(min_length=10,max_length=128)

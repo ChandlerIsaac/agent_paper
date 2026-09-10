@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ResearchMate · 引用图谱</title><link rel="stylesheet" href="/static/citation-graph.css"></head>
+<body><div class="graph-app">
+  <header><a href="/" class="back">← 返回研究工作台</a><div class="title"><span>RESEARCHMATE</span><h1>论文引用图谱</h1></div>
+    <select id="kbSelect" aria-label="选择知识库"></select><button id="fit">适应画布</button><button id="refresh">刷新</button><button id="enrich" class="primary">联网补全缺失项</button></header>
+  <div id="status" role="status">正在读取图谱…</div>
+  <main><section class="stage"><canvas id="graph" aria-label="点状论文引用网络"></canvas><div id="tooltip" hidden></div>
+    <div class="legend"><span><i class="seed"></i>上传论文</span><span><i class="local"></i>PDF本地提取</span><span><i class="pending"></i>待核验</span><span><i class="matched"></i>联网补全</span></div>
+    <div class="help">滚轮缩放 · 拖动画布或节点 · 点击节点查看详情</div></section>
+    <aside id="detail"><div class="empty-detail"><b>选择一个点</b><p>查看论文题目、作者、出版信息与原始参考文献。</p></div></aside></main>
+</div><script src="/static/citation-graph.js" defer></script></body></html>

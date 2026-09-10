@@ -24,6 +24,8 @@ def test_workspace_browser(tmp_path,monkeypatch):
     from langgraph.checkpoint.sqlite import SqliteSaver
     from langchain_core.language_models import FakeListChatModel
     from app.core.config import Settings
+    from app.citations.service import CitationGraphService
+    from app.citations.store import CitationStore
     from tests.test_workspace import Vectors
 
     settings=Settings(mimo_api_key='test',mimo_base_url='https://example.com/v1',model_name='test',
@@ -45,6 +47,8 @@ def test_workspace_browser(tmp_path,monkeypatch):
             return True
     index=Index()
     rag=RAGService(settings,store,index)
+    citation_store=CitationStore(settings.database_path)
+    citations=CitationGraphService(settings.database_path,index,None,document_store=store)
     notes=NoteMemory(store,Vectors(),'test')
     connection=sqlite3.connect(tmp_path/'checkpoints.db',check_same_thread=False)
     saver=SqliteSaver(connection)
@@ -56,13 +60,14 @@ def test_workspace_browser(tmp_path,monkeypatch):
                                 'content':'Published in a test venue'}],
                     'provider':'test-search','elapsed_seconds':.01}
     graph=build_research_graph(rag,model,saver,notes=notes,web_search=Web())
-    rt=SimpleNamespace(store=store,rag=rag,notes=notes,settings=settings,agent=ResearchAgent(graph),
+    rt=SimpleNamespace(store=store,rag=rag,citations=citations,notes=notes,settings=settings,agent=ResearchAgent(graph),
                        checkpointer=saver,connection=connection,vectors=index,mutation_lock=threading.RLock())
     @lru_cache()
     def runtime():
         return rt
     monkeypatch.setattr(main,'get_runtime',runtime)
     monkeypatch.setattr(main,'get_store',lambda:store)
+    monkeypatch.setattr(main,'get_citation_store',lambda:citation_store)
     sock=socket.socket()
     sock.bind(('127.0.0.1',0))
     port=sock.getsockname()[1]
@@ -84,6 +89,9 @@ def test_workspace_browser(tmp_path,monkeypatch):
             page.locator('#username').fill('browser_user')
             page.locator('#password').fill('browser-password-123')
             page.locator('#register').click()
+            page.wait_for_timeout(500)
+            assert errors==[],errors
+            assert page.locator('#authError').inner_text()=='',page.locator('#authError').inner_text()
             page.locator('#auth').wait_for(state='hidden')
             page.once('dialog',lambda d:d.accept('Browser Research'))
             page.locator('#createKb').click()
@@ -100,6 +108,11 @@ def test_workspace_browser(tmp_path,monkeypatch):
             page.evaluate("renderMessage('assistant','usage',{trace:[{detail:'done'}],duration_seconds:2,usage:{reported:true,input_tokens:10,output_tokens:5,total_tokens:15}}).classList.add('usage-probe')")
             expect(page.locator('.trace-tokens').last).to_contain_text('Token 15')
             page.locator('.usage-probe').evaluate('element => element.remove()')
+            page.evaluate("renderMessage('assistant','| 类别 | 数量 |\\n| --- | ---: |\\n| 推荐系统 | 5 |',{pending:true}).classList.add('table-probe')")
+            expect(page.locator('.table-probe table')).to_have_count(1)
+            expect(page.locator('.table-probe tbody td')).to_have_count(2)
+            expect(page.locator('.table-probe tbody td').nth(0)).to_have_text('推荐系统')
+            page.locator('.table-probe').evaluate('element => element.remove()')
             assert page.locator('#question').input_value()==''
             page.locator('#question').fill('What are its limitations?')
             page.locator('#question').press('Enter')
@@ -119,11 +132,16 @@ def test_workspace_browser(tmp_path,monkeypatch):
             page.locator('#noteTitle').fill('Attention finding')
             page.locator('#noteForm button').click()
             page.locator('#notes .card').wait_for()
-            page.locator('[data-tab=graph]').click()
-            page.locator('.graph-node').first.click()
-            page.locator('.page-buttons button').first.click()
+            page.locator('[data-tab=documents]').click()
+            page.locator('#documents .card button').first.click()
             page.locator('#sourceText').wait_for()
             assert 'attention mechanism' in page.locator('#sourceText').inner_text()
+            page.locator('[data-tab=graph]').click()
+            expect(page.locator('#openCitationGraph')).to_be_visible()
+            graph_url=page.locator('#openCitationGraph').get_attribute('href')
+            page.goto(f'http://127.0.0.1:{port}'+graph_url)
+            expect(page.locator('#graph')).to_be_visible()
+            expect(page.locator('#status')).to_contain_text('上传论文 1')
             page.screenshot(path=str(tmp_path/'workspace-desktop.png'),full_page=True)
             page.set_viewport_size({'width':390,'height':844})
             assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')

@@ -53,12 +53,14 @@ python -m scripts.claim_legacy 你的用户名
 | 会话、完整回答与引用 | 同一数据库：conversations、chat_turns | 页面刷新恢复 |
 | LangGraph 状态 | data/checkpoints.sqlite3 | 重启后保留消息和工作流状态 |
 | 笔记与向量 | 业务数据库：notes、note_vectors | 长期记忆及语义检索 |
-| 文档切片向量 | data/milvus/researchmate.db | Milvus Lite 文档检索 |
+| 文档切片向量 | data/milvus/researchmate.db | Milvus Lite E5 稠密检索 |
+| BM25 稀疏索引 | data/researchmate.sqlite3：sparse_chunks | 精确词项检索 |
+| 论文与引用边 | data/researchmate.sqlite3：papers、citation_edges | 引用图谱和匹配审计 |
 | 原始文件 | data/uploads/知识库ID/上传ID/文件名 | 保留原文 |
 
 Checkpointer 路径位于 DATABASE_PATH 的同级目录。会话 ID 由服务端生成，
 每次读取、提问、重命名和删除都检查 owner_id。会话绑定知识库且不允许修改。
-LangGraph 读取持久化消息，模型使用最近 12 条消息进行查询改写与回答。
+LangGraph 读取持久化消息，模型使用最近 6 条截断消息进行查询改写与回答。
 短期历史消息只用于指代消解，不作为论文事实的独立证据。
 
 笔记由用户明确点击“保存笔记”后建立索引；不会自动保存所有对话为长期记忆。
@@ -67,6 +69,25 @@ LangGraph 读取持久化消息，模型使用最近 12 条消息进行查询改
 数据量大时可升级。每个知识库只检索自己的笔记，旧笔记或模型版本变化时懒重建向量。
 当前返回 Top-K 候选，不将相似度称为正确概率。笔记在回答中明确标为“个人笔记”，
 不能充当原文证据。删除笔记不会追溯改写已保存的历史回答。
+
+## 混合检索
+
+文档入库时，同一批带页码切片分别写入 Milvus Lite 和 SQLite 稀疏索引。查询先从
+multilingual-e5-small 与 Okapi BM25 各取候选，再使用 RRF（Reciprocal Rank Fusion）
+按名次融合，最后返回 Top-K。RRF 不直接相加余弦相似度与 BM25 分数，因为两种分数
+不处于同一量纲。中文分词采用字符 unigram + bigram，英文保留单词以及 DOI 等复合标识符。
+
+```dotenv
+HYBRID_SEARCH_ENABLED=true
+HYBRID_CANDIDATE_K=10
+RRF_RANK_CONSTANT=60
+```
+
+已有文档没有 `sparse_chunks` 记录时会自动回退到 E5 检索，不影响问答；在文档卡片点击
+“重建索引”即可补齐 BM25 数据。关闭 `HYBRID_SEARCH_ENABLED` 并重启可恢复纯 E5 模式。
+当前 BM25 会读取单个知识库的稀疏切片并在进程内计分，适合本项目的小规模单机版本；
+大规模语料应迁移到专用稀疏检索服务。混合检索已经通过功能和排序测试，但在人工评价集
+建立前，不能声称它提高了 Recall@K、MRR 或答案准确率。
 
 ## 联网工具及执行过程
 
@@ -128,12 +149,34 @@ Crossref JSON，因此无需修改历史数据库。
 - [Crossref REST API](https://www.crossref.org/documentation/retrieve-metadata/rest-api/)
 - [Tavily Search](https://docs.tavily.com/documentation/api-reference/endpoint/search)
 
-## 图谱
+## 论文引用图谱
 
-当前展示真实的“知识库 → 文档”结构；点击文档展开页码按钮，点击页码查看解析原文。
-节点来自数据库，不凭模型生成关系。多于 100 页的文档可以直接输入页码。
-这不是实体语义知识图谱，不声称论文 A 改进了论文 B，也不把向量相似视为因果关系。
-实体/关系抽取和人工审核属于下一阶段。
+工作台右侧只保留数量摘要和入口；点击“打开引用图谱”进入独立全尺寸页面。独立页面使用
+点—边网络：上传论文是较大的深绿色点，PDF本地引用、待核验引用和联网补全引用使用不同颜色，
+并支持滚轮缩放、拖动画布、拖动节点和点击查看详情。
+
+上传时系统从参考文献表离线抽取一跳引用，有向边严格表示参考文献表中的“引用”关系。每条边保留参考文献编号、
+解析页、抽取方式和原始引文；没有从正文推断“改进”“支持”或因果关系。
+旧文档可点击“解析引用”补建图谱。
+
+本地工具 `extract_document_references` 只接收当前知识库中已登记的 document_id，不接收任意
+服务器路径，也不调用网络或下载额外模型。它从 PDF 参考文献表提取题名、作者、年份、
+期刊/会议和 DOI，并将这些本地元数据直接加入 RAG。题名和年份仍属于待核查的解析结果。
+点击“联网补全元数据”时，
+页面先显示本批次将向 Crossref 发送的字段范围，用户拒绝则不发请求。接受后最多并发 4 个请求、
+每批最多 30 条（接口上限 50 条），并且只查询题名或年份无法形成可靠核心身份的条目，
+不再逐条查询所有参考文献。DOI 一致视为精确匹配；没有 DOI 时使用规范化题名相似度并
+结合年份，阈值为 0.78。匹配分数是字符串相似度规则的结果，不是正确概率，自动匹配仍需人工复核。
+低于阈值的候选不会覆盖本地记录。
+
+通过阈值的题目、作者、摘要、期刊/会议、日期和 DOI 写入 SQLite，同时作为
+`cited_paper` 元数据文档写入 E5/Milvus 与 BM25，因此后续问答可以检索它，并在来源区明确显示
+“引用论文元数据”。Crossref 经常不提供摘要，此时字段保持为空，不由模型补写。当前只构建
+上传论文参考文献中的一跳网络；二跳扩展、作者/机构实体、人工合并与拆分、版本关系属于后续阶段。
+
+普通论文问答仍使用Top-K混合检索；但“共有多少参考文献”“全部引用”“领域占比/分布”等
+集合级问题会绕过Top-K，直接读取SQLite里的全部引用节点和引用边。引用元数据检索按paper_id
+进行实体级去重，避免同一论文的本地记录与Crossref记录被显示成两个来源。
 
 ## 主要接口
 
@@ -148,7 +191,10 @@ Crossref JSON，因此无需修改历史数据库。
 | 联网授权决定 | /api/chat/approvals/{approval_id} |
 | 笔记保存、列表、语义搜索 | /api/knowledge-bases/{kb}/notes?query=… |
 | 笔记删除 | /api/knowledge-bases/{kb}/notes/{note} |
-| 文档结构图 | /api/knowledge-bases/{kb}/graph |
+| 旧版文档结构图 | /api/knowledge-bases/{kb}/graph |
+| 引用图谱 | /api/knowledge-bases/{kb}/citation-graph |
+| 离线解析引用 | /api/knowledge-bases/{kb}/documents/{doc}/citations/extract |
+| 授权并补全元数据 | /api/knowledge-bases/{kb}/citation-graph/enrich |
 | 原文页面 | /api/knowledge-bases/{kb}/documents/{doc}/pages/{page} |
 
 除了健康检查与注册/登录，所有 API 都需要登录 Cookie。

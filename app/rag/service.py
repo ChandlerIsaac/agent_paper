@@ -8,6 +8,7 @@ from langchain_core.documents import Document
 from app.core.config import Settings
 from app.memory.store import SQLiteStore
 from app.rag.loaders import load_document
+from app.rag.sparse_store import SparseBM25Store, reciprocal_rank_fusion
 from app.rag.splitters import split_documents
 from app.rag.vector_store import MilvusVectorStore
 
@@ -31,6 +32,9 @@ class SearchHit:
     chunk_id: str
     source: str
     page: int
+    kind: str = "document"
+    paper_id: str = ""
+    metadata_provider: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -44,10 +48,15 @@ class RAGService:
         settings: Settings,
         business_store: SQLiteStore,
         vector_store: MilvusVectorStore,
+        sparse_store: SparseBM25Store | None = None,
     ) -> None:
         self.settings = settings
         self.business_store = business_store
         self.vector_store = vector_store
+        self.sparse_store = sparse_store
+        self.retrieval_mode = (
+            "hybrid" if settings.hybrid_search_enabled and sparse_store else "dense"
+        )
 
     def _unlink_managed_file(self, file_path: str | Path) -> None:
         """Delete files only when they live below the configured upload root."""
@@ -76,6 +85,14 @@ class RAGService:
         if not self.vector_store.delete_document(knowledge_base_id, document_id):
             raise RuntimeError("旧文档向量清理失败，已停止写入")
         self.vector_store.add_documents(chunks)
+        if self.sparse_store:
+            try:
+                self.sparse_store.replace_document(
+                    knowledge_base_id,document_id,chunks
+                )
+            except Exception:
+                self.vector_store.delete_document(knowledge_base_id,document_id)
+                raise
 
         result = IngestResult(
             document_id=document_id,
@@ -103,13 +120,39 @@ class RAGService:
         knowledge_base_id: str,
         top_k: int | None = None,
     ) -> list[SearchHit]:
-        results = self.vector_store.search(
+        limit = top_k or self.settings.retrieval_top_k
+        candidate_k = max(limit,self.settings.hybrid_candidate_k)
+        dense_results = self.vector_store.search(
             query=query,
             knowledge_base_id=knowledge_base_id,
-            top_k=top_k or self.settings.retrieval_top_k,
+            top_k=candidate_k,
         )
+        if self.retrieval_mode=="hybrid":
+            sparse_results = self.sparse_store.search(
+                query,knowledge_base_id,candidate_k
+            )
+            results = reciprocal_rank_fusion(
+                dense_results,sparse_results,top_k=candidate_k,
+                rank_constant=self.settings.rrf_rank_constant,
+            )
+        else:
+            results = dense_results
         hits = []
+        seen_entities = {}
         for document, score in results:
+            entity_key = str(document.metadata.get("paper_id") or document.metadata["chunk_id"])
+            if entity_key in seen_entities:
+                position=seen_entities[entity_key]
+                current_provider=hits[position].metadata_provider
+                new_provider=str(document.metadata.get("metadata_provider",""))
+                if new_provider=="crossref" and current_provider!="crossref":
+                    hits[position]=SearchHit(content=document.page_content,score=float(score),
+                        document_id=str(document.metadata["document_id"]),chunk_id=str(document.metadata["chunk_id"]),
+                        source=str(document.metadata["source"]),page=int(document.metadata["page"]),
+                        kind=str(document.metadata.get("kind","document")),paper_id=str(document.metadata.get("paper_id","")),
+                        metadata_provider=new_provider)
+                continue
+            seen_entities[entity_key]=len(hits)
             hits.append(
                 SearchHit(
                     content=document.page_content,
@@ -118,9 +161,12 @@ class RAGService:
                     chunk_id=str(document.metadata["chunk_id"]),
                     source=str(document.metadata["source"]),
                     page=int(document.metadata["page"]),
+                    kind=str(document.metadata.get("kind","document")),
+                    paper_id=str(document.metadata.get("paper_id","")),
+                    metadata_provider=str(document.metadata.get("metadata_provider","")),
                 )
             )
-        return hits
+        return hits[:limit]
 
     def reindex(
         self,
@@ -151,6 +197,8 @@ class RAGService:
             raise KeyError("文档不存在")
         if not self.vector_store.delete_document(knowledge_base_id, document_id):
             raise RuntimeError("Milvus 文档向量删除失败")
+        if self.sparse_store:
+            self.sparse_store.delete_document(knowledge_base_id,document_id)
         self.business_store.delete_document(knowledge_base_id, document_id)
         self._unlink_managed_file(record["file_path"])
         return {"deleted": True, "document_id": document_id}
@@ -164,6 +212,8 @@ class RAGService:
         ]
         if not self.vector_store.delete_knowledge_base(knowledge_base_id):
             raise RuntimeError("Milvus 知识库向量删除失败")
+        if self.sparse_store:
+            self.sparse_store.delete_knowledge_base(knowledge_base_id)
         self.business_store.delete_knowledge_base(knowledge_base_id)
         for record in records:
             if record:

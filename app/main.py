@@ -12,11 +12,12 @@ import uuid
 from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from app.api.schemas import ChatRequest, KnowledgeBaseCreate, NoteCreate, Credentials, ConversationCreate, Rename, WebApprovalDecision
+from app.api.schemas import ChatRequest, KnowledgeBaseCreate, NoteCreate, Credentials, ConversationCreate, Rename, WebApprovalDecision, CitationEnrichmentRequest
 from app.core.config import PROJECT_ROOT, get_settings
 from app.core.logging import setup_logging
 from app.rag.loaders import load_document
-from app.runtime import get_runtime, get_store
+from app.runtime import get_runtime, get_store, get_citation_store
+from app.citations.service import format_citation_graph
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -86,6 +87,11 @@ def index():
     return FileResponse(PROJECT_ROOT/'app'/'static'/'index.html')
 
 
+@app.get('/citation-graph',include_in_schema=False)
+def citation_graph_page():
+    return FileResponse(PROJECT_ROOT/'app'/'static'/'citation-graph.html')
+
+
 @app.get('/api/health')
 def health():
     return {'status':'ok','version':app.version}
@@ -149,7 +155,9 @@ def delete_kb(kb: str,request: Request):
         threads = [x for x in rt.store.conversations(request.state.user['id']) if x['knowledge_base_id']==kb]
         for thread in threads:
             rt.checkpointer.delete_thread(thread['id'])
-        return rt.rag.delete_knowledge_base(kb)
+        result=rt.rag.delete_knowledge_base(kb)
+        rt.citations.delete_kb(kb)
+        return result
 
 
 @app.get('/api/knowledge-bases/{kb}/documents')
@@ -178,6 +186,13 @@ def upload(kb: str,request: Request,file: UploadFile=File(...)):
                 output.write(chunk)
         with rt.mutation_lock:
             result = rt.rag.ingest(destination,kb).to_dict()
+            try:
+                result.update(rt.citations.extract_document(
+                    kb,result['document_id'],result['filename'],destination
+                ))
+            except Exception as error:
+                logger.warning('Citation extraction failed for %s: %s',result['document_id'],type(error).__name__)
+                result.update({'citation_count':0,'extraction_status':'failed'})
         return result
     except Exception:
         destination.unlink(missing_ok=True)
@@ -191,7 +206,9 @@ def delete_document(kb: str,doc: str,request: Request):
     owned_kb(request,kb)
     rt = get_runtime()
     with rt.mutation_lock:
-        return rt.rag.delete_document(kb,doc)
+        result=rt.rag.delete_document(kb,doc)
+        rt.citations.delete_document(kb,doc)
+        return result
 
 
 @app.post('/api/knowledge-bases/{kb}/documents/{doc}/reindex')
@@ -199,7 +216,14 @@ def reindex(kb: str,doc: str,request: Request):
     owned_kb(request,kb)
     rt = get_runtime()
     with rt.mutation_lock:
-        return rt.rag.reindex(kb,doc).to_dict()
+        result = rt.rag.reindex(kb,doc).to_dict()
+        record = rt.store.get_document(kb,doc)
+        try:
+            result.update(rt.citations.extract_document(kb,doc,result['filename'],record['file_path']))
+        except Exception as error:
+            logger.warning('Citation extraction failed for %s: %s',doc,type(error).__name__)
+            result.update({'citation_count':0,'extraction_status':'failed'})
+        return result
 
 
 @app.get('/api/knowledge-bases/{kb}/documents/{doc}/pages/{page}')
@@ -225,6 +249,31 @@ def graph_data(kb: str,request: Request):
         edges.append(dict(source=kb,target=doc['id'],relation='包含'))
     return {'nodes':nodes,'edges':edges,'kind':'document_structure',
             'description':'文档结构关系；选择文档展开页面，不表示实体语义或因果关系'}
+
+
+@app.get('/api/knowledge-bases/{kb}/citation-graph')
+def citation_graph(kb: str,request: Request):
+    owned_kb(request,kb)
+    return format_citation_graph(get_citation_store().graph(kb))
+
+
+@app.post('/api/knowledge-bases/{kb}/documents/{doc}/citations/extract')
+def extract_citations(kb: str,doc: str,request: Request):
+    owned_kb(request,kb)
+    rt=get_runtime(); record=rt.store.get_document(kb,doc)
+    if not record: raise HTTPException(404,'文档不存在')
+    with rt.mutation_lock:
+        return rt.citations.extract_document(kb,doc,record['filename'],record['file_path'])
+
+
+@app.post('/api/knowledge-bases/{kb}/citation-graph/enrich')
+def enrich_citation_graph(kb: str,payload: CitationEnrichmentRequest,request: Request):
+    owned_kb(request,kb)
+    if not payload.accepted:
+        pending=len(get_citation_store().candidates(kb,10000))
+        return {'accepted':False,'pending':pending,'matched':0,'failed':0}
+    with get_runtime().mutation_lock:
+        return get_runtime().citations.enrich(kb,accepted=True,limit=payload.limit)
 
 
 @app.post('/api/conversations',status_code=201)

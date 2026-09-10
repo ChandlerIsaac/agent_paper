@@ -78,6 +78,28 @@ def asks_for_publication_metadata(question):
     ))
 
 
+def asks_for_citation_overview(question):
+    return bool(re.search(
+        r'(?:参考文献|引用(?:论文|文献)?).{0,20}(?:多少|总数|数量|占比|比例|分布|领域|统计|所有|全部)|'
+        r'\b(?:references?|citations?)\b.{0,30}\b(?:count|total|distribution|all)\b',
+        question,flags=re.IGNORECASE,
+    ))
+
+
+def citation_overview_evidence(citation_store,knowledge_base_id):
+    data=citation_store.graph(knowledge_base_id)
+    papers=[paper for paper in data['papers'] if paper['role']=='cited']
+    lines=[f"唯一引用论文数：{len(papers)}",f"引用关系数：{len(data['edges'])}","全部引用论文："]
+    for index,paper in enumerate(papers,1):
+        fields=[paper['title'][:400],paper.get('venue','')[:300],
+                str(paper.get('year') or '年份未知'),paper.get('match_status','')]
+        lines.append(f"{index}. "+' | '.join(value for value in fields if value))
+    content='\n'.join(lines)
+    return {'content':content,'score':1.0,'document_id':'','chunk_id':'citation_graph_overview',
+            'source':'引用图谱全量统计','page':0,'kind':'citation_graph','paper_id':'',
+            'metadata_provider':'sqlite'}
+
+
 def citation_numbers(text):
     numbers = set()
     for match in _citation_pattern.finditer(text):
@@ -104,7 +126,8 @@ def compact_history(messages,limit=6,characters=1600):
     return compact
 
 
-def build_research_graph(rag_service, chat_model, checkpointer=None, notes=None, web_search=None):
+def build_research_graph(rag_service, chat_model, checkpointer=None, notes=None, web_search=None,
+                         citation_store=None):
     def contextualize(state):
         messages = state.get('messages',[])
         query = last_question(state)
@@ -116,10 +139,16 @@ def build_research_graph(rag_service, chat_model, checkpointer=None, notes=None,
         return {'query':query,'trace':event(state,'context','已结合会话上下文确定检索问题',query=query)}
 
     def retrieve(state):
-        hits = rag_service.search(state['query'],state['knowledge_base_id'])
-        found = notes.search(state['query'],state['knowledge_base_id']) if notes else []
-        trace = event(state,'retrieve',f'检索到 {len(hits)} 条文档片段、{len(found)} 条个人笔记')
-        return {'evidence':[x.to_dict() for x in hits], 'notes':found,'trace':trace}
+        overview = citation_store and (asks_for_citation_overview(state['query']) or
+                                       asks_for_citation_overview(last_question(state)))
+        hits = [] if overview else rag_service.search(state['query'],state['knowledge_base_id'])
+        found = [] if overview else (notes.search(state['query'],state['knowledge_base_id']) if notes else [])
+        mode = 'BM25 + E5 + RRF 混合检索' if getattr(rag_service,'retrieval_mode','dense')=='hybrid' else 'E5 稠密检索'
+        evidence=[citation_overview_evidence(citation_store,state['knowledge_base_id'])] if overview else [x.to_dict() for x in hits]
+        detail=(f'已读取引用图谱的全部论文节点和引用关系' if overview else
+                f'{mode}返回 {len(hits)} 条文档片段、{len(found)} 条个人笔记')
+        trace = event(state,'retrieve',detail)
+        return {'evidence':evidence, 'notes':found,'trace':trace}
 
     def assess(state):
         enough = bool(state.get('evidence'))
@@ -195,8 +224,9 @@ def build_research_graph(rag_service, chat_model, checkpointer=None, notes=None,
     def answer(state):
         sources = []
         for item in state.get('evidence',[]):
-            sources.append(dict(kind='document',source=item['source'],page=item['page'],
-                document_id=item['document_id'],score=item['score'],snippet=item['content']))
+            sources.append(dict(kind=item.get('kind','document'),source=item['source'],page=item['page'],
+                document_id=item['document_id'],paper_id=item.get('paper_id',''),
+                metadata_provider=item.get('metadata_provider',''),score=item['score'],snippet=item['content']))
         for item in state.get('notes',[]):
             sources.append(dict(kind='note',source=item['title'],note_id=item['id'],
                 score=item['score'],snippet=item['content'][:2000]))

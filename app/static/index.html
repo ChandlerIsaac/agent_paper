@@ -51,7 +51,7 @@
   </main>
   <aside class="resources">
     <div class="resource-heading"><h3>研究资料</h3><span class="pill">私有空间</span></div>
-    <div class="tabs"><button data-tab="documents" class="active">文档</button><button data-tab="notes">笔记</button><button data-tab="graph">结构图</button></div>
+    <div class="tabs"><button data-tab="documents" class="active">文档</button><button data-tab="notes">笔记</button><button data-tab="graph">引用图谱</button></div>
     <section id="documentsPanel">
       <form id="uploadForm" class="upload-card"><label>添加研究资料<input id="file" type="file" accept=".pdf,.docx,.md,.markdown,.txt" required></label><button class="primary" id="uploadButton">上传并建立索引</button><p class="small muted">支持 PDF、Word、Markdown、TXT，最大 50 MB</p></form>
       <div id="documents"></div><button id="deleteKb" class="danger subtle">删除当前知识库</button>
@@ -61,9 +61,10 @@
       <form id="noteForm"><input id="noteTitle" placeholder="笔记标题" maxlength="200" required><textarea id="noteContent" placeholder="保存经过确认的研究结论……" rows="5" maxlength="20000" required></textarea><button class="primary">保存笔记</button></form>
       <div id="notes"></div>
     </section>
-    <section id="graphPanel" hidden><p class="small muted">知识库 → 文档 → 页面。点击节点查看来源。这是文档结构图，不代表实体语义关系。</p>
-      <div class="graph-wrap"><svg id="graph" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="知识库文档结构图"></svg></div>
-      <div id="pagePicker"></div>
+    <section id="graphPanel" hidden>
+      <p class="small muted">引用网络已移到独立的大画布页面，以点和连线展示，支持缩放、拖动和查看论文详情。</p>
+      <p id="graphStats" class="small muted"></p>
+      <a id="openCitationGraph" class="graph-launch" href="/citation-graph" target="_blank" rel="noopener">打开引用图谱 ↗</a>
     </section>
     <section id="sourcePanel" hidden><div class="row"><h3 id="sourceTitle">原文</h3><button id="closeSource">收起</button></div><pre id="sourceText"></pre></section>
   </aside>

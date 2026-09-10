@@ -1,7 +1,7 @@
 # ResearchMate Agent
 
 多用户工作台已加入账号登录、持久化连续对话、笔记语义检索、
-可点击的文档结构图，以及可选联网补充和执行过程摘要。
+可点击的论文引用图谱，以及可选联网补充和执行过程摘要。
 **当前版本启动、旧数据归属迁移与功能边界请阅读 [工作台使用说明](docs/workspace.md)。**
 首次升级后请注册账号，再按文档运行本地旧知识库分配命令。
 
@@ -14,10 +14,13 @@ LangChain、LangGraph、FastAPI、SQLite、Milvus Lite 和 Sentence Transformers
 - 解析 PDF、DOCX、Markdown 和 TXT；
 - 保留文件名、页码、文档 ID、切片 ID 等溯源元数据；
 - 使用 multilingual-e5-small 生成归一化稠密向量；
+- 使用持久化 Okapi BM25 补充精确词项检索，并通过 RRF 融合排名；
 - 使用 Milvus Lite 存储向量，并按知识库隔离检索；
 - 使用 LangGraph 执行“检索—必要时改写一次—生成回答”流程；
 - 返回来源编号、文件名、页码、相关度和原文片段；
 - 使用 SQLite 保存知识库、文档、消息和研究笔记；
+- 从论文参考文献表构建“上传论文 → 引用论文”有向图，保留原始引文；
+- 经用户逐次授权后使用 Crossref 补全引用论文元数据，并加入 RAG；
 - 提供 FastAPI、SSE 状态事件和简单浏览器界面。
 
 ## 处理流程
@@ -26,12 +29,13 @@ LangChain、LangGraph、FastAPI、SQLite、Milvus Lite 和 Sentence Transformers
 上传文档
   → 解析正文与页码
   → 递归文本切分
-  → E5 passage 向量
-  → Milvus Lite
+  ├→ E5 passage 向量 → Milvus Lite
+  └→ BM25 词项索引 → SQLite
 
 用户问题
-  → E5 query 向量
-  → 当前知识库 Top-K 检索
+  → E5 稠密检索 + BM25 稀疏检索
+  → RRF 排名融合
+  → 当前知识库 Top-K 证据
   → 证据不足时改写一次
   → MIMO 生成回答
   → 返回引用与原文片段
@@ -49,6 +53,7 @@ agent_paper/
 │   ├── agent/        # LangGraph 状态、模型与工作流
 │   ├── rag/          # 加载、切分、Embedding、Milvus 和 RAG 服务
 │   ├── memory/       # SQLite 业务数据
+│   ├── citations/    # 引用解析、Crossref 匹配和图谱持久化
 │   ├── core/         # 配置、日志和异常
 │   ├── static/       # 简单 Web 页面
 │   ├── main.py       # FastAPI 应用
@@ -107,6 +112,9 @@ DATABASE_PATH=data/researchmate.sqlite3
 UPLOAD_DIR=data/uploads
 MILVUS_LITE_PATH=data/milvus/researchmate.db
 MILVUS_COLLECTION=researchmate_chunks
+HYBRID_SEARCH_ENABLED=true
+HYBRID_CANDIDATE_K=10
+RRF_RANK_CONSTANT=60
 ```
 
 不要把 `.env` 或任何真实 API Key 提交到 Git。
@@ -194,6 +202,9 @@ http://127.0.0.1:18000
 | GET | `/api/knowledge-bases/{kb_id}/documents` | 查询文档 |
 | DELETE | `/api/knowledge-bases/{kb_id}/documents/{doc_id}` | 删除文档 |
 | POST | `/api/knowledge-bases/{kb_id}/documents/{doc_id}/reindex` | 重建索引 |
+| GET | `/api/knowledge-bases/{kb_id}/citation-graph` | 查询论文引用图谱 |
+| POST | `/api/knowledge-bases/{kb_id}/documents/{doc_id}/citations/extract` | 离线重建引用关系 |
+| POST | `/api/knowledge-bases/{kb_id}/citation-graph/enrich` | 经明确授权后补全元数据 |
 | POST | `/api/chat` | 带引用问答 |
 | POST | `/api/chat/stream` | SSE 状态和结果事件 |
 | GET | `/api/conversations/{thread_id}/messages` | 查询消息历史 |
@@ -206,12 +217,12 @@ http://127.0.0.1:18000
 python -m pytest -q
 ```
 
-自动化测试覆盖文档解析、切分元数据、SQLite、FastAPI 健康检查，以及
-Milvus 的知识库过滤和删除语义。
+自动化测试覆盖文档解析、切分元数据、SQLite、引用抽取、书目匹配、
+FastAPI 健康检查，以及 Milvus 的知识库过滤和删除语义。
 
 ## 第一版边界
 
-当前版本使用稠密向量检索和 SQLite LangGraph Checkpointer，重启后可恢复会话状态。
-BM25、RRF、Cross-Encoder 重排序、实体关系抽取、评价数据集、Docker Compose 和
-逐 Token 流式输出属于后续阶段。已有聊天接口现在需要账号登录及服务端创建的会话 ID，
+当前版本使用 E5 + BM25 + RRF 混合检索和 SQLite LangGraph Checkpointer，重启后可恢复会话状态。
+Cross-Encoder 重排序、二跳引用扩展、人工实体消歧、评价数据集和 Docker Compose 属于后续阶段。
+已有聊天接口现在需要账号登录及服务端创建的会话 ID，
 详见工作台使用说明。

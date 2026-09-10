@@ -65,6 +65,22 @@ class Settings(BaseSettings):
         le=20,
         validation_alias="RETRIEVAL_TOP_K",
     )
+    hybrid_search_enabled: bool = Field(
+        default=True,
+        validation_alias="HYBRID_SEARCH_ENABLED",
+    )
+    hybrid_candidate_k: int = Field(
+        default=10,
+        ge=2,
+        le=100,
+        validation_alias="HYBRID_CANDIDATE_K",
+    )
+    rrf_rank_constant: int = Field(
+        default=60,
+        ge=1,
+        le=1000,
+        validation_alias="RRF_RANK_CONSTANT",
+    )
 
     langsmith_tracing: bool = Field(
         default=False,
