@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ResearchMate · 研究工作台</title><link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<dialog id="auth">
+  <form id="authForm">
+    <div class="mark">R</div><h1>ResearchMate</h1><p class="muted">让每一次研究，都有据可循。</p>
+    <label>用户名<input id="username" autocomplete="username" pattern="[a-zA-Z0-9_\-]{3,40}" required placeholder="3–40 位字母、数字、下划线"></label>
+    <label>密码<input id="password" type="password" autocomplete="current-password" minlength="10" maxlength="128" required placeholder="至少 10 个字符"></label>
+    <p id="authError" role="alert"></p>
+    <div class="row"><button type="submit" class="primary">登录</button><button id="register" type="button">注册账号</button></div>
+    <p class="small muted">每个账号拥有独立的知识库、聊天记录与研究笔记。</p>
+  </form>
+</dialog>
+<dialog id="webApproval" class="approval-dialog">
+  <div class="approval-icon">🌐</div>
+  <h2>允许联网检索吗？</h2>
+  <p class="muted">本地证据不足。ResearchMate 准备向公开搜索服务发送下面的检索词，不会上传整篇论文或笔记。</p>
+  <div class="approval-detail"><span>搜索服务</span><strong id="approvalProvider">—</strong></div>
+  <div class="approval-query"><span>将发送的搜索词</span><code id="approvalQuery"></code></div>
+  <p class="small muted">请求将在 60 秒后自动拒绝。</p>
+  <div class="row"><button id="rejectWeb" type="button">拒绝，仅用本地证据</button><button id="acceptWeb" type="button" class="primary">接受并联网</button></div>
+</dialog>
+<div class="workspace">
+  <aside class="sidebar">
+    <div class="brand"><span class="mark">R</span><div>ResearchMate<small>你的研究工作台</small></div></div>
+    <button id="newChat" class="primary">＋ 新建会话</button>
+    <div class="section-title">研究空间<button id="createKb" class="icon" title="创建知识库">＋</button></div>
+    <select id="kbSelect" aria-label="当前知识库"></select>
+    <div class="section-title">历史会话</div><nav id="threads" aria-label="历史会话"></nav>
+    <div class="account"><span id="currentUser"></span><button id="logout">退出</button></div>
+  </aside>
+  <main>
+    <header><div><span class="eyebrow">RESEARCH CONVERSATION</span><h2 id="chatTitle">开始一段有依据的对话</h2></div>
+      <div class="row"><button id="renameChat" title="重命名会话">重命名</button><button id="deleteChat" class="danger">删除会话</button></div>
+    </header>
+    <div id="messages" class="messages" aria-live="polite">
+      <div class="empty"><div class="orb">✧</div><h2>从一个好问题开始</h2><p>创建知识库、上传论文，然后提问。<br>回答、引用与研究笔记会保存在这里。</p></div>
+    </div>
+    <div class="composer">
+      <form id="chatForm">
+        <textarea id="question" rows="3" placeholder="询问论文方法、比较实验，或继续追问……" maxlength="8000" required></textarea>
+        <div class="compose-bottom"><label class="toggle"><input id="allowWeb" type="checkbox">需要联网时询问我</label>
+          <button id="send" class="primary" type="submit">发送 ↑</button></div>
+      </form>
+      <div class="small muted">Enter 发送 · Shift+Enter 换行 · 联网仅发送搜索词；来源可展开核查</div>
+    </div>
+  </main>
+  <aside class="resources">
+    <div class="resource-heading"><h3>研究资料</h3><span class="pill">私有空间</span></div>
+    <div class="tabs"><button data-tab="documents" class="active">文档</button><button data-tab="notes">笔记</button><button data-tab="graph">结构图</button></div>
+    <section id="documentsPanel">
+      <form id="uploadForm" class="upload-card"><label>添加研究资料<input id="file" type="file" accept=".pdf,.docx,.md,.markdown,.txt" required></label><button class="primary" id="uploadButton">上传并建立索引</button><p class="small muted">支持 PDF、Word、Markdown、TXT，最大 50 MB</p></form>
+      <div id="documents"></div><button id="deleteKb" class="danger subtle">删除当前知识库</button>
+    </section>
+    <section id="notesPanel" hidden>
+      <div class="row"><input id="noteQuery" placeholder="按含义搜索笔记" aria-label="搜索笔记"><button id="searchNotes">搜索</button></div>
+      <form id="noteForm"><input id="noteTitle" placeholder="笔记标题" maxlength="200" required><textarea id="noteContent" placeholder="保存经过确认的研究结论……" rows="5" maxlength="20000" required></textarea><button class="primary">保存笔记</button></form>
+      <div id="notes"></div>
+    </section>
+    <section id="graphPanel" hidden><p class="small muted">知识库 → 文档 → 页面。点击节点查看来源。这是文档结构图，不代表实体语义关系。</p>
+      <div class="graph-wrap"><svg id="graph" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="知识库文档结构图"></svg></div>
+      <div id="pagePicker"></div>
+    </section>
+    <section id="sourcePanel" hidden><div class="row"><h3 id="sourceTitle">原文</h3><button id="closeSource">收起</button></div><pre id="sourceText"></pre></section>
+  </aside>
+</div>
+<div id="toast" role="status" hidden></div>
+<script src="/static/app.js" defer></script>
+</body></html>
